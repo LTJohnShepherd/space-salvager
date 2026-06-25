@@ -28,43 +28,49 @@ class HandTracker:
                      if lms.landmark[t].y > lms.landmark[p].y)
         return curled >= 3
 
-    def get_direction(self, frame):
-        """Process a BGR frame. Returns (direction, annotated_frame).
+    def get_direction(self, frame, deadzone: float = 0.15):
+        """Process a BGR frame. Returns ((dx, dy), annotated_frame).
 
-        direction in {"left","right","up","down","idle"}.
-        Index fingertip position relative to frame center picks the dominant
-        axis; a closed fist forces "idle" (brake).
+        dx, dy are each in {-1, 0, 1}, derived independently from the index
+        fingertip's offset from the frame center, so diagonals are possible
+        (e.g. (1, -1) = up-right). A closed fist forces (0, 0) (brake), as does
+        no hand detected. `deadzone` is the fraction of the half-frame the
+        finger must pass before an axis activates.
         """
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = self.hands.process(rgb)
 
-        direction = "idle"  # default when no hand is detected
+        dx = dy = 0  # default when no hand is detected
         if result.multi_hand_landmarks:
             lms = result.multi_hand_landmarks[0]
             self.mp_draw.draw_landmarks(frame, lms, self.mp_hands.HAND_CONNECTIONS)
 
             if self._is_fist(lms):
-                direction = "idle"
                 cv2.putText(frame, "FIST = BRAKE", (20, 70),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
             else:
                 h, w, _ = frame.shape
                 cx = lms.landmark[8].x * w
                 cy = lms.landmark[8].y * h
-                dx = cx - w / 2
-                dy = cy - h / 2
-                if abs(dx) > abs(dy):
-                    direction = "right" if dx > 0 else "left"
-                else:
-                    direction = "down" if dy > 0 else "up"
+                # normalized offset from center in [-1, 1] per axis
+                ox = (cx - w / 2) / (w / 2)
+                oy = (cy - h / 2) / (h / 2)
+                if ox > deadzone:
+                    dx = 1
+                elif ox < -deadzone:
+                    dx = -1
+                if oy > deadzone:
+                    dy = 1
+                elif oy < -deadzone:
+                    dy = -1
                 cv2.circle(frame, (int(cx), int(cy)), 12, (255, 0, 255), cv2.FILLED)
         else:
             cv2.putText(frame, "No hand detected", (20, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
 
-        cv2.putText(frame, f"Move: {direction}", (20, frame.shape[0] - 20),
+        cv2.putText(frame, f"Move: ({dx}, {dy})", (20, frame.shape[0] - 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-        return direction, frame
+        return (dx, dy), frame
 
     def close(self):
         try:

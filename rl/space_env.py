@@ -8,6 +8,20 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 
+# 9 discrete actions -> (dx, dy) direction vectors (8 directions + idle).
+# The game normalizes diagonals so they are not faster than straight moves.
+ACTION_VECTORS = [
+    (0, 0),    # 0 idle
+    (0, -1),   # 1 up
+    (0, 1),    # 2 down
+    (-1, 0),   # 3 left
+    (1, 0),    # 4 right
+    (-1, -1),  # 5 up-left
+    (1, -1),   # 6 up-right
+    (-1, 1),   # 7 down-left
+    (1, 1),    # 8 down-right
+]
+
 
 class SpaceEnv(gym.Env):
     metadata = {"render_modes": ["human", None]}
@@ -18,8 +32,8 @@ class SpaceEnv(gym.Env):
         self.game = game
         self.render_enabled = render
 
-        # 5 discrete actions: left, right, up, down, idle
-        self.action_space = spaces.Discrete(5)
+        # 9 discrete actions: idle + 4 straight + 4 diagonal
+        self.action_space = spaces.Discrete(len(ACTION_VECTORS))
         # observation is normalized 0..1, length 6
         self.observation_space = spaces.Box(
             low=0.0, high=1.0, shape=(6,), dtype=np.float32
@@ -36,16 +50,8 @@ class SpaceEnv(gym.Env):
         return obs, {}
 
     def step(self, action):
-        if action == 0:
-            self.game.move_left()
-        elif action == 1:
-            self.game.move_right()
-        elif action == 2:
-            self.game.move_up()
-        elif action == 3:
-            self.game.move_down()
-        else:
-            self.game.idle()
+        dx, dy = ACTION_VECTORS[int(action)]
+        self.game.set_velocity(dx, dy)
 
         self.game.update()
 

@@ -16,14 +16,6 @@ from game.space_game import SpaceGame
 from vision.hand_tracker import HandTracker
 from vision.face_analyzer import FaceAnalyzer
 
-DIR_TO_ACTION = {
-    "left": lambda g: g.move_left(),
-    "right": lambda g: g.move_right(),
-    "up": lambda g: g.move_up(),
-    "down": lambda g: g.move_down(),
-    "idle": lambda g: g.idle(),
-}
-
 
 def main():
     cap = cv2.VideoCapture(0)
@@ -46,6 +38,8 @@ def main():
                     running = False
                 elif event.key == pygame.K_r:
                     game.reset()
+                elif event.key == pygame.K_m:
+                    game.toggle_mute()
 
         # --- OpenCV: read + pre-process a frame ---
         ret, frame = cap.read()
@@ -54,16 +48,16 @@ def main():
         else:
             frame = cv2.flip(frame, 1)
 
-            # --- MediaPipe: hand -> direction ---
-            direction, frame = hands.get_direction(frame)
-            DIR_TO_ACTION.get(direction, DIR_TO_ACTION["idle"])(game)
+            # --- MediaPipe: hand -> direction vector (supports diagonals) ---
+            (dx, dy), frame = hands.get_direction(frame)
+            game.set_velocity(dx, dy)
 
             # --- DeepFace: emotion -> difficulty ---
             emotion, difficulty = face.analyze(frame)
             game.difficulty = difficulty
             game.overlay_lines = [
                 "Camera Mode",
-                f"Hand: {direction}",
+                f"Hand: ({dx}, {dy})",
                 f"Emotion: {emotion}",
             ]
             cv2.putText(frame, f"Emotion: {emotion}", (20, frame.shape[0] - 50),

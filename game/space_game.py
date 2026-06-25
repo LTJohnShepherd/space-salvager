@@ -25,9 +25,21 @@ WIDTH = 800
 HEIGHT = 600
 PLAYER_SPEED = 6.0          # pixels per step
 PIRATE_BASE_SPEED = 2.2     # pixels per step (scaled by difficulty)
+# Collision radii (gameplay) — kept separate from on-screen sprite size below
 PLAYER_RADIUS = 22
 ORE_RADIUS = 18
 PIRATE_RADIUS = 26
+
+# On-screen sprite size = longest edge in px (visual only, does NOT affect
+# collision). Decoupled so thin/long ships can be drawn larger without
+# changing the hitbox. Tune these freely.
+PLAYER_DISPLAY = 48
+ORE_DISPLAY = 40
+PIRATE_DISPLAY = 96
+
+# Audio: master volume 0.0-1.0 (set START_VOLUME low; press M in-game to mute)
+MASTER_VOLUME = 0.3
+
 NUM_PIRATES = 3
 STEP_LIMIT = 2000           # truncation
 TARGET_SCORE = 15           # success condition
@@ -45,13 +57,37 @@ ORE_IMAGES = ["AsteroidRUAOre.png", "AsteroidRUBOre.png",
 
 
 def _load(path, size):
-    """Load+scale an image, returning None on any failure (game still runs)."""
+    """Load+scale an image to an exact (w, h), returning None on failure."""
     try:
         img = pygame.image.load(path)
         img = img.convert_alpha() if pygame.display.get_surface() else img
         return pygame.transform.smoothscale(img, size)
     except Exception:
         return None
+
+
+def _load_fit(path, max_side):
+    """Load an image and scale its longest edge to max_side, preserving the
+    native aspect ratio (no squishing). Returns None on failure."""
+    try:
+        img = pygame.image.load(path)
+        img = img.convert_alpha() if pygame.display.get_surface() else img
+        w, h = img.get_size()
+        if w >= h:
+            tw, th = max_side, max(1, round(max_side * h / w))
+        else:
+            tw, th = max(1, round(max_side * w / h)), max_side
+        return pygame.transform.smoothscale(img, (tw, th))
+    except Exception:
+        return None
+
+
+def _facing_angle(vx, vy):
+    """Pygame rotation (degrees) that turns an up-pointing sprite to face the
+    direction (vx, vy), where +y is down (screen coords). Sprites are authored
+    nose-up; rotate by this to point along travel. Add 180 here if a given
+    sprite is authored nose-down."""
+    return -math.degrees(math.atan2(vx, -vy))
 
 
 class SpaceGame:
@@ -78,18 +114,24 @@ class SpaceGame:
         # background camera frame (optional, set by camera_play)
         self.camera_surface = None
         self.overlay_lines = []
+        self.muted = False
         self.reset()
+        # play the launch sound once per program start (not on every respawn)
+        self._play("start")
+
+    def toggle_mute(self):
+        """Toggle all game audio. Returns the new muted state."""
+        self.muted = not self.muted
+        return self.muted
 
     # ---------------- asset loading ----------------
     def _load_assets(self):
         img = os.path.join(_ASSETS, "images")
         self.bg = _load(os.path.join(img, "nebula_15.png"), (WIDTH, HEIGHT))
-        self.player_img = _load(os.path.join(img, "Interceptor.png"),
-                                (PLAYER_RADIUS * 2, PLAYER_RADIUS * 2))
-        self.pirate_img = _load(os.path.join(img, "PirateCruiser.png"),
-                                (PIRATE_RADIUS * 2, PIRATE_RADIUS * 2))
-        self.ore_imgs = [_load(os.path.join(img, n),
-                               (ORE_RADIUS * 2, ORE_RADIUS * 2))
+        # ships/ore: fit the longest edge, preserving native aspect (no squish)
+        self.player_img = _load_fit(os.path.join(img, "Interceptor.png"), PLAYER_DISPLAY)
+        self.pirate_img = _load_fit(os.path.join(img, "PirateCruiser.png"), PIRATE_DISPLAY)
+        self.ore_imgs = [_load_fit(os.path.join(img, n), ORE_DISPLAY)
                          for n in ORE_IMAGES]
         snd = os.path.join(_ASSETS, "sounds")
         self.sounds = {}
@@ -100,11 +142,15 @@ class SpaceGame:
                             ("start", "start.ogg")):
                 p = os.path.join(snd, fn)
                 if os.path.exists(p):
-                    self.sounds[key] = pygame.mixer.Sound(p)
+                    snd_obj = pygame.mixer.Sound(p)
+                    snd_obj.set_volume(MASTER_VOLUME)
+                    self.sounds[key] = snd_obj
         except Exception:
             self.sounds = {}
 
     def _play(self, key):
+        if getattr(self, "muted", False):
+            return
         s = self.sounds.get(key) if hasattr(self, "sounds") else None
         if s is not None:
             try:
@@ -116,6 +162,7 @@ class SpaceGame:
     def reset(self):
         self.player = pygame.math.Vector2(WIDTH / 2, HEIGHT / 2)
         self.vel = pygame.math.Vector2(0, 0)
+        self.angle = 0.0  # player facing (degrees); 0 = pointing up
         self.ore = self._random_ore()
         self.ore_kind = random.randrange(len(ORE_IMAGES))
         self.pirates = [self._random_pirate() for _ in range(NUM_PIRATES)]
@@ -125,7 +172,6 @@ class SpaceGame:
         self.won = False
         self.last_reward = 0.0
         self._prev_dist = self._dist(self.player, self.ore)
-        self._play("start")
         return self.get_state()
 
     def close(self):
@@ -157,11 +203,26 @@ class SpaceGame:
         return (a - b).length()
 
     # ---------------- actions ----------------
-    def move_left(self):  self.vel = pygame.math.Vector2(-PLAYER_SPEED, 0)
-    def move_right(self): self.vel = pygame.math.Vector2(PLAYER_SPEED, 0)
-    def move_up(self):    self.vel = pygame.math.Vector2(0, -PLAYER_SPEED)
-    def move_down(self):  self.vel = pygame.math.Vector2(0, PLAYER_SPEED)
-    def idle(self):       self.vel = pygame.math.Vector2(0, 0)
+    def set_velocity(self, dx, dy):
+        """Set the player's velocity from a direction (dx, dy in {-1,0,1}).
+
+        The vector is normalized so diagonals are not faster than straight
+        moves, then scaled by PLAYER_SPEED. When moving, the ship's facing
+        angle is updated; when idle it keeps its last heading.
+        """
+        v = pygame.math.Vector2(dx, dy)
+        if v.length() > 0:
+            v = v.normalize()
+            self.angle = _facing_angle(v.x, v.y)  # face travel direction
+            v *= PLAYER_SPEED
+        self.vel = v
+
+    # convenience wrappers (used by manual/camera modes)
+    def move_left(self):  self.set_velocity(-1, 0)
+    def move_right(self): self.set_velocity(1, 0)
+    def move_up(self):    self.set_velocity(0, -1)
+    def move_down(self):  self.set_velocity(0, 1)
+    def idle(self):       self.set_velocity(0, 0)
 
     # ---------------- step ----------------
     def update(self):
@@ -253,23 +314,27 @@ class SpaceGame:
         # ore
         ore_img = self.ore_imgs[self.ore_kind] if self.ore_imgs else None
         if ore_img is not None:
-            self.screen.blit(ore_img, (self.ore.x - ORE_RADIUS, self.ore.y - ORE_RADIUS))
+            rect = ore_img.get_rect(center=(int(self.ore.x), int(self.ore.y)))
+            self.screen.blit(ore_img, rect)
         else:
             pygame.draw.circle(self.screen, GOLD, (int(self.ore.x), int(self.ore.y)), ORE_RADIUS)
 
-        # pirates
+        # pirates (rotated to face their travel direction)
         for p in self.pirates:
             if self.pirate_img is not None:
-                self.screen.blit(self.pirate_img,
-                                 (p["pos"].x - PIRATE_RADIUS, p["pos"].y - PIRATE_RADIUS))
+                ang = _facing_angle(p["dir"].x, p["dir"].y)
+                rimg = pygame.transform.rotate(self.pirate_img, ang)
+                rect = rimg.get_rect(center=(int(p["pos"].x), int(p["pos"].y)))
+                self.screen.blit(rimg, rect)
             else:
                 pygame.draw.circle(self.screen, RED,
                                    (int(p["pos"].x), int(p["pos"].y)), PIRATE_RADIUS)
 
-        # player
+        # player (rotated to face its heading)
         if self.player_img is not None:
-            self.screen.blit(self.player_img,
-                             (self.player.x - PLAYER_RADIUS, self.player.y - PLAYER_RADIUS))
+            rimg = pygame.transform.rotate(self.player_img, self.angle)
+            rect = rimg.get_rect(center=(int(self.player.x), int(self.player.y)))
+            self.screen.blit(rimg, rect)
         else:
             pygame.draw.circle(self.screen, GREEN,
                                (int(self.player.x), int(self.player.y)), PLAYER_RADIUS)
