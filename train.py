@@ -8,7 +8,7 @@ from stable_baselines3 import PPO
 from game.space_game import SpaceGame
 from rl.space_env import SpaceEnv
 
-TOTAL_TIMESTEPS = 200_000   # raise for a stronger agent
+TOTAL_TIMESTEPS = 500_000   # raise for a stronger agent
 RENDER = False              # True to watch training (slower)
 MODEL_PATH = "models/space_model"
 
