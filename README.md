@@ -5,7 +5,7 @@ pirate ships. The same game can be played three ways — by **keyboard**, by
 **hand gestures + facial emotion** through a webcam, and by a **reinforcement-learning
 agent** that learned to play it on its own.
 
-> **Submitter:** _<your name + ID>_
+> **Submitter:** _maksim kif_
 
 ---
 
