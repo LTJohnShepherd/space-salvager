@@ -1,0 +1,8 @@
+pygame>=2.5
+opencv-python>=4.8.0
+mediapipe>=0.10.14
+deepface>=0.0.93
+tf-keras>=2.20.0
+gymnasium>=0.29
+stable-baselines3>=2.3.0
+numpy>=1.23,<2.0

@@ -1,0 +1,12 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.idea/
+.vscode/
+.DS_Store
+*.log
+
+# Training artifacts / logs (keep the final models/space_model.zip)
+tensorboard/
+*.tmp
